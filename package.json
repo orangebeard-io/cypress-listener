@@ -1,0 +1,17 @@
+{
+  "name": "@orangebeard-io/cypress-listener",
+  "version": "1.0.0",
+  "description": "A Cypress listener for Orangebeard.io",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Team Soju",
+  "license": "AGPL-3.0",
+  "dependencies": {
+    "@orangebeard-io/javascript-client": "1.0.9",
+    "flatted": "^3.2.7",
+    "mocha": "10.1.0",
+    "node-ipc": "^11.1.0"
+  }
+}
