@@ -16,7 +16,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v2
         with:
-          node-version: '14'
+          node-version: '16'
       - name: Cache node modules
         uses: actions/cache@v2
         with:
@@ -28,7 +28,7 @@ jobs:
         run: npm install
       - name: Get version from package.json
         id: exposeVersion
-        run: echo "::set-output name=releaseVersion::$(npm run get-version --silent)"
+        run: echo "releaseVersion=$(npm run get-version --silent)" >> $GITHUB_OUTPUT
   prepare-release:
     needs: get-version
     runs-on: ubuntu-latest
@@ -44,11 +44,11 @@ jobs:
       - name: Create tag
         run: |
           git tag -a v${{ needs.get-version.outputs.releaseVersion }} -m ${{ needs.get-version.outputs.releaseVersion }}
-          git push origin main --follow-tags
+          git push origin master --follow-tags
       - name: Setup Node.js
         uses: actions/setup-node@v2
         with:
-          node-version: '14'
+          node-version: '16'
       - name: Cache node modules
         uses: actions/cache@v2
         with:
@@ -150,4 +150,4 @@ jobs:
           npm run update-version
           git add package.json package-lock.json
           git commit -m "Update version"
-          git push origin main
+          git push origin master
