@@ -1,6 +1,6 @@
 {
   "name": "@orangebeard-io/cypress-listener",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A Cypress listener for Orangebeard.io",
   "main": "index.js",
   "scripts": {
