@@ -143,8 +143,6 @@ jobs:
             node_modules-
       - name: Install Node dependencies
         run: npm install
-      - name: Transpile to JS
-        run: npx tsc
       - name: Update version
         run: |
           npm run update-version
