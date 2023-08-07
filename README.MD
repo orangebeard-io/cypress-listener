@@ -45,6 +45,8 @@ In your cypress.config.js file, provide the necessary configuration for the list
 ```JavaScript
 const { defineConfig } = require('cypress');
 const registerOrangebeardPlugin = require('@orangebeard-io/cypress-listener/lib/plugin');
+const glob = require('glob');
+const delay = async (ms) => new Promise((res) => setTimeout(res, ms));
 
 module.exports = defineConfig({
   "reporter": "@orangebeard-io/cypress-listener",
