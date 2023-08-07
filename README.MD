@@ -57,7 +57,17 @@ module.exports = defineConfig({
   },
   e2e: {
     setupNodeEvents(on, config) {
-      return registerOrangebeardPlugin(on, config);
+      // !Important: Keep Cypress running until the listener is finished, preventing unfinished runs in Orangebeard
+      on('after:run', async () => {
+        console.log('Wait for Orangebeard listener to finish reporting...');
+        while (glob.sync('orangebeard-*.lock').length > 0) {
+          console.log(glob.sync('orangebeard-*.lock'))
+          await delay(1000);
+        }
+        console.log('Orangebeard listener finished');
+      });
+      registerOrangebeardPlugin(on, config);
+      return config;
     },
   },
 });
