@@ -78,4 +78,15 @@ module.exports = defineConfig({
 
 ### Running
 
-Now run your tests normally `cypress run` and get results in Orangebeard!
+Now run your tests normally using `cypress run` and get results in Orangebeard!
+
+Note that when running a subset from the commandline, you will have to use the `--config` flag, as the `--spec` flag will not be passed to the reporter, resulting in the reporter to expect all specs in the project and thus not finishing up correctly.
+
+Example:
+```
+cypress run --browser chrome --config "specPattern=cypress/e2e/somespec/*.cy.js"
+```
+or:
+```
+cypress run --browser chrome --config '{"specPattern":["cypress/e2e/somespec/*.cy.js"]}'
+```
