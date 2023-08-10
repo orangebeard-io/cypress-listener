@@ -40,7 +40,7 @@ npm install @orangebeard-io/cypress-listener
 
 ## Configuration
 
-In your cypress.config.js file, provide the necessary configuration for the listener and the plugin to combine multiple spec files into a single run:
+In your cypress.config.js file, provide the necessary configuration for the listener and the plugin:
 
 ```JavaScript
 const { defineConfig } = require('cypress');
@@ -90,3 +90,5 @@ or:
 ```
 cypress run --browser chrome --config '{"specPattern":["cypress/e2e/somespec/*.cy.js"]}'
 ```
+
+Using the `--reporter-options` or `-o` flag, it is also possible to provide reporter options from the command line.
