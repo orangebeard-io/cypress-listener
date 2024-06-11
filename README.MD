@@ -51,27 +51,28 @@ const delay = async (ms) => new Promise((res) => setTimeout(res, ms));
 module.exports = defineConfig({
   "reporter": "@orangebeard-io/cypress-listener",
   "reporterOptions": {
-    "endpoint": "http://tenant.orangebeard.app",
+    "endpoint": "https://tenant.orangebeard.app",
     "token": "00000000-0000-0000-0000-00000000",
     "testset": "Cypress.io test run",
     "project": "project_name",
-    "description": "A description of the test run"
+    "description": "A description of the test run", 
+    "reportVideo": false //optional
   },
-  e2e: {
-    setupNodeEvents(on, config) {
-      // !Important: Keep Cypress running until the listener is finished, preventing unfinished runs in Orangebeard
-      on('after:run', async () => {
-        console.log('Wait for Orangebeard listener to finish reporting...');
-        while (glob.sync('orangebeard-*.lock').length > 0) {
-          console.log(glob.sync('orangebeard-*.lock'))
-          await delay(1000);
-        }
-        console.log('Orangebeard listener finished');
-      });
-      registerOrangebeardPlugin(on, config);
-      return config;
+    e2e: {
+        setupNodeEvents(on, config) {
+            // keep Cypress running until the listener has finished sending its async events, preventing unfinished runs in Orangebeard
+            on('after:run', async () => {
+                console.log('Wait for Orangebeard listener to finish reporting...');
+                while (glob.sync('orangebeard-*.lock').length > 0) {
+                    await delay(500);
+                }
+                console.log('Orangebeard listener finished');
+            });
+            registerOrangebeardPlugin(on, config);
+            return config;
+        },
     },
-  },
+    video: true, //optional
 });
 ```
 

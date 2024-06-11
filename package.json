@@ -1,6 +1,6 @@
 {
   "name": "@orangebeard-io/cypress-listener",
-  "version": "1.0.14",
+  "version": "2.0.0",
   "description": "A Cypress listener for Orangebeard.io",
   "main": "index.js",
   "scripts": {
@@ -12,12 +12,13 @@
   "author": "Team Soju",
   "license": "AGPL-3.0",
   "dependencies": {
-    "@orangebeard-io/javascript-client": "1.0.9",
-    "flatted": "^3.2.7",
-    "mocha": "10.1.0",
-    "node-ipc": "10.1.0",
-    "glob": "^10.3.3",
-    "minimatch": "^9.0.1"
+    "@js-joda/core": "^5.6.2",
+    "@orangebeard-io/javascript-client": "^2.0.3",
+    "flatted": "^3.3.1",
+    "glob": "^10.4.1",
+    "minimatch": "^9.0.4",
+    "mocha": "10.4.0",
+    "node-ipc": "10.1.0"
   },
   "devDependencies": {
     "auto-changelog": "2.4.0",
