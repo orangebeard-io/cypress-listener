@@ -81,7 +81,7 @@ export function getOrangebeardClientSettings(configuration: any = {}): Orangebea
   // Mirror javascript-client behavior: if referenceUrl is set, add it as an attribute.
   if (merged.referenceUrl !== undefined) {
     const already = (merged.attributes ?? []).some(
-      (a) => a?.key === 'reference_url' && a?.value === merged.referenceUrl,
+      (a: Attribute) => a?.key === 'reference_url' && a?.value === merged.referenceUrl,
     );
     if (!already) {
       merged.attributes = (merged.attributes ?? []).concat({
