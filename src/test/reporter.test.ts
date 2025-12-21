@@ -3,6 +3,14 @@ import assert from 'node:assert/strict';
 import * as path from 'node:path';
 
 import OrangebeardCypressReporter from '../reporter/OrangebeardCypressReporter';
+import {
+  formatAsMarkdownCodeBlock,
+  normalizeIncomingLog,
+  parseErrorLog,
+} from '../reporter/logging';
+import { CommandStepTracker } from '../reporter/commandStepTracker';
+import { indexSpecSuite, resolveRootSuiteIdForSpec } from '../reporter/specSuiteIndex';
+import { resolveTestIdForScreenshotPath } from '../reporter/testNameIndex';
 
 function resetReporterStatics() {
   const R: any = OrangebeardCypressReporter;
@@ -42,20 +50,14 @@ test('resolveTestset precedence: client > reporterOptions > env', () => {
 });
 
 test('formatAsMarkdownCodeBlock wraps and escapes fences', () => {
-  resetReporterStatics();
-  const reporter: any = makeReporterWithOptions();
-
-  const md = reporter.formatAsMarkdownCodeBlock('line1\n```\nline2', 'js');
+  const md = formatAsMarkdownCodeBlock('line1\n```\nline2', 'js');
   assert.ok(md.startsWith('```js\n'));
   assert.ok(md.endsWith('\n```'));
   assert.ok(md.includes('\\`\\`\\`'));
 });
 
 test('parseErrorLog returns MARKDOWN with codeFrame wrapped in code block', () => {
-  resetReporterStatics();
-  const reporter: any = makeReporterWithOptions();
-
-  const parsed = reporter.parseErrorLog({
+  const parsed = parseErrorLog({
     name: 'AssertionError',
     type: 'assertion',
     message: 'boom',
@@ -75,32 +77,25 @@ test('parseErrorLog returns MARKDOWN with codeFrame wrapped in code block', () =
 
 test('indexSpecSuite + resolveRootSuiteIdForSpec resolve to spec root suite', () => {
   resetReporterStatics();
-  const reporter: any = makeReporterWithOptions();
+  const R: any = OrangebeardCypressReporter;
 
   const suiteId = '8da18397-ace1-4002-be78-b0bbd2a04af5';
 
-  reporter.indexSpecSuite(suiteId, 'cypress\\e2e\\app.cy.js');
+  indexSpecSuite(R.specSuites, suiteId, 'cypress\\e2e\\app.cy.js');
 
   // direct match
-  assert.equal(
-    reporter.resolveRootSuiteIdForSpec({ relative: 'cypress\\e2e\\app.cy.js' }),
-    suiteId,
-  );
+  assert.equal(resolveRootSuiteIdForSpec(R.specSuites, { relative: 'cypress\\e2e\\app.cy.js' }), suiteId);
 
   // basename match
-  assert.equal(reporter.resolveRootSuiteIdForSpec({ name: 'app.cy.js' }), suiteId);
+  assert.equal(resolveRootSuiteIdForSpec(R.specSuites, { name: 'app.cy.js' }), suiteId);
 
-  // absolute path match should work through basename fallback
-  assert.equal(
-    reporter.resolveRootSuiteIdForSpec({ absolute: 'E:/x/y/cypress/e2e/app.cy.js' }),
-    suiteId,
-  );
+  // absolute path match should work through derived relative key
+  assert.equal(resolveRootSuiteIdForSpec(R.specSuites, { absolute: 'E:/x/y/cypress/e2e/app.cy.js' }), suiteId);
 });
 
 test('resolveTestIdForScreenshotPath uses screenshot filename to select correct test UUID', () => {
   resetReporterStatics();
   const R: any = OrangebeardCypressReporter;
-  const reporter: any = makeReporterWithOptions();
 
   const uuidEmpty = '00000000-0000-0000-0000-000000000001';
   const uuidTodos = '00000000-0000-0000-0000-000000000002';
@@ -123,6 +118,53 @@ test('resolveTestIdForScreenshotPath uses screenshot filename to select correct 
     'TodoMVC - React -- Contrast -- has good contrast with several todos (failed).png',
   );
 
-  assert.equal(reporter.resolveTestIdForScreenshotPath(p1), uuidEmpty);
-  assert.equal(reporter.resolveTestIdForScreenshotPath(p2), uuidTodos);
+  assert.equal(resolveTestIdForScreenshotPath(R.testNameToUUID, p1), uuidEmpty);
+  assert.equal(resolveTestIdForScreenshotPath(R.testNameToUUID, p2), uuidTodos);
+});
+
+test('normalizeIncomingLog maps levels and formats non-strings as markdown JSON', () => {
+  const normalized = normalizeIncomingLog({ level: 'warn', message: { a: 1 } });
+  assert.equal(normalized.level, 'WARN');
+  assert.equal(normalized.logFormat, 'MARKDOWN');
+  assert.ok(String(normalized.message).includes('```json'));
+});
+
+test('CommandStepTracker starts and finishes a step', () => {
+  const calls: any[] = [];
+
+  const tracker = new CommandStepTracker({
+    isDisabled: () => false,
+    getTime: () => 't',
+    getTestRunUUID: () => '00000000-0000-0000-0000-000000000010',
+    getCurrentTestUUID: () => '00000000-0000-0000-0000-000000000020',
+    resolveTestIdForNameKey: () => null,
+    startStep: (payload: any) => {
+      calls.push(['startStep', payload]);
+      return '00000000-0000-0000-0000-000000000030';
+    },
+    finishStep: (id: any, payload: any) => {
+      calls.push(['finishStep', id, payload]);
+    },
+    logMessage: (testId: any, message: any, logLevel: any, stepId: any, logFormat: any) => {
+      calls.push(['logMessage', testId, message, logLevel, stepId, logFormat]);
+      return '00000000-0000-0000-0000-000000000040';
+    },
+    formatAsMarkdownJson: (v: unknown) => String(v),
+  });
+
+  tracker.handleEvent({
+    event: 'start',
+    commandId: 'cmd1',
+    commandName: 'get',
+    message: 'foo',
+  });
+
+  tracker.handleEvent({
+    event: 'finish',
+    commandId: 'cmd1',
+    state: 'passed',
+  });
+
+  assert.equal(calls[0][0], 'startStep');
+  assert.equal(calls.find((c) => c[0] === 'finishStep')[0], 'finishStep');
 });

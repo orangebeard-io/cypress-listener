@@ -1,5 +1,4 @@
 import { UUID } from 'crypto';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import Mocha from 'mocha';
@@ -9,13 +8,12 @@ import type { Attachment } from '@orangebeard-io/javascript-client/dist/client/m
 import { IPC_EVENTS } from '../ipcEvents';
 import { startIPCServer } from '../ipcServer';
 import { level, status, testEntity } from '../constants';
-import {
-  getBytes,
-  getOrangebeardClientSettings,
-  getStartTestRun,
-  getTime,
-  getTotalSpecs,
-} from '../utils';
+import { getBytes, getOrangebeardClientSettings, getStartTestRun, getTime, getTotalSpecs } from '../utils';
+import { buildErrorLogs, formatAsMarkdownCodeBlock, formatAsMarkdownJson, normalizeIncomingLog } from './logging';
+import { CommandStepTracker } from './commandStepTracker';
+import { createLockFile, deleteLockFile } from './lockfile';
+import { indexSpecSuite, normalizeSpecKey, resolveRootSuiteIdForSpec, type SpecSuiteIndex } from './specSuiteIndex';
+import { indexTestName, resolveTestIdForNameKey, resolveTestIdForScreenshotPath, type TestNameIndex } from './testNameIndex';
 
 type CypressReporterConfiguration = {
   reporterOptions?: Record<string, any>;
@@ -29,9 +27,6 @@ type ActiveItem = {
   fullName?: string | null;
 };
 
-type SpecSuiteIndex = {
-  [specKey: string]: UUID;
-};
 
 // This reporter outputs test results to Orangebeard.
 export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
@@ -40,11 +35,27 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
   // Reporter instance state (read mostly from statics)
   private readonly isParallel: boolean;
   private currentSpecKey: string | null = null;
+  private readonly commandStepTracker: CommandStepTracker;
 
   constructor(runner: Mocha.Runner, configuration: CypressReporterConfiguration) {
     super(runner, configuration as any);
 
     this.options = configuration?.reporterOptions ?? {};
+
+    this.commandStepTracker = new CommandStepTracker({
+      isDisabled: () => OrangebeardCypressReporter.disabled,
+      getTime,
+      getTestRunUUID: () => OrangebeardCypressReporter.testRun!,
+      getCurrentTestUUID: () => this.getCurrentTestTempId(),
+      resolveTestIdForNameKey: (name: string) => resolveTestIdForNameKey(OrangebeardCypressReporter.testNameToUUID, name),
+      startStep: (payload: any) => OrangebeardCypressReporter.client!.startStep(payload as any) as UUID,
+      finishStep: (stepId: UUID, payload: any) => {
+        OrangebeardCypressReporter.client!.finishStep(stepId, payload as any);
+      },
+      logMessage: (testId, message, logLevel, stepId, logFormat) =>
+        this.logMessage(testId, message, logLevel, stepId ?? null, logFormat ?? 'PLAIN_TEXT'),
+      formatAsMarkdownJson,
+    });
 
     // parallel mode: join an existing run rather than creating/finishing it
     this.isParallel = Boolean(this.options.testRunUUID || this.options.parallelMode);
@@ -92,7 +103,20 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
         server.on(IPC_EVENTS.LOG, (log: any) => {
           const testId = this.getCurrentTestTempId();
           if (!testId) return;
-          this.logMessage(testId, log?.message ?? String(log), level.INFO, this.getCurrentStepTempId());
+
+          const normalized = normalizeIncomingLog(log);
+          this.logMessage(
+            testId,
+            normalized.message,
+            normalized.level,
+            this.getCurrentStepTempId(),
+            normalized.logFormat,
+          );
+        });
+
+        server.on(IPC_EVENTS.COMMAND_STEP, (evt: any) => {
+          // Synchronous, but keep inflight contract consistent.
+          this.track(Promise.resolve().then(() => this.commandStepTracker.handleEvent(evt)));
         });
 
         server.on(IPC_EVENTS.SCREENSHOT, (details: any) => {
@@ -107,6 +131,7 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
       (server) => {
         server.off(IPC_EVENTS.CONFIG, '*');
         server.off(IPC_EVENTS.LOG, '*');
+        server.off(IPC_EVENTS.COMMAND_STEP, '*');
         server.off(IPC_EVENTS.SCREENSHOT, '*');
         server.off(IPC_EVENTS.SPEC_ARTIFACTS, '*');
       },
@@ -122,7 +147,6 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
         }
         this.joinExistingRun(provided as unknown as UUID);
       } else {
-        console.info("Starting testrun!")
         this.startTestRun();
       }
     });
@@ -164,15 +188,15 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
       // Index the suite for this spec so `after:spec` can attach artifacts.
       // Do NOT rely on `suite.isRoot` (it is not stable across Cypress/Mocha versions).
       if (suite.file) {
-        this.indexSpecSuite(newSuite[0], suite.file);
-        this.currentSpecKey = this.normalizeSpecKey(suite.file);
+        indexSpecSuite(OrangebeardCypressReporter.specSuites, newSuite[0], suite.file);
+        this.currentSpecKey = normalizeSpecKey(suite.file);
         if (this.currentSpecKey) {
           this.ensureSpecArtifactsPromise(this.currentSpecKey);
         }
 
         // Also index the legacy computed activeSpec (often just the basename).
         if (OrangebeardCypressReporter.activeSpec) {
-          this.indexSpecSuite(newSuite[0], OrangebeardCypressReporter.activeSpec);
+          indexSpecSuite(OrangebeardCypressReporter.specSuites, newSuite[0], OrangebeardCypressReporter.activeSpec);
         }
       }
     });
@@ -200,18 +224,15 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
             this.startTest(test, testEntity.BEFORE);
           }
 
-          const parsed = this.parseErrorLog(err);
-          const logId = this.logMessage(
-            this.getCurrentTestTempId(),
-            parsed.message,
-            level.ERROR,
-            null,
-            parsed.logFormat,
-          );
+          const testId = this.getCurrentTestTempId();
+          if (testId) {
+            for (const entry of buildErrorLogs(err)) {
+              this.logMessage(testId, entry.message, entry.level, null, entry.logFormat);
+            }
+          }
 
           // Do not attach screenshots here.
           // Cypress emits `after:screenshot` for failure screenshots; we attach them there using the real file path.
-          void logId;
 
           this.finishTest(test);
         })(),
@@ -242,12 +263,23 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
 
       if (isTest) {
         if (hook.status === 'failed') {
-          this.logMessage(this.getCurrentTestTempId(), hook.err, level.ERROR);
+          const testId = this.getCurrentTestTempId();
+          if (testId) {
+            for (const entry of buildErrorLogs(hook.err)) {
+              this.logMessage(testId, entry.message, entry.level, null, entry.logFormat);
+            }
+          }
         }
         this.finishTest(hook);
       } else {
         if (hook.status === 'failed') {
-          this.logMessage(this.getCurrentStepTempId(), hook.err, level.ERROR);
+          const stepId = this.getCurrentStepTempId();
+          const testId = this.getCurrentTestTempId();
+          if (testId) {
+            for (const entry of buildErrorLogs(hook.err)) {
+              this.logMessage(testId, entry.message, entry.level, stepId, entry.logFormat);
+            }
+          }
         }
         this.finishStep(hook, this.getCurrentStepTempId());
       }
@@ -306,7 +338,7 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
       }),
     ) as UUID;
 
-    createLockFile(OrangebeardCypressReporter.testRun);
+    OrangebeardCypressReporter.lockFileName = createLockFile(OrangebeardCypressReporter.testRun);
   }
 
   private joinExistingRun(testRunUUID: UUID): void {
@@ -344,28 +376,6 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
       : null;
   }
 
-  private formatAsMarkdownCodeBlock(code: string, lang = 'js'): string {
-    // Avoid accidental closing fences.
-    const safe = String(code ?? '').replace(/```/g, '\\`\\`\\`');
-    return `\`\`\`${lang}\n${safe}\n\`\`\``;
-  }
-
-  private parseErrorLog(err: any): { message: string; logFormat: 'PLAIN_TEXT' | 'MARKDOWN' } {
-    if (err?.codeFrame) {
-      const header = `**[${err.name}:${err.type}]** ${err.message}`;
-      const location = `File: ${err.codeFrame.relativeFile || 'unknown file'}`;
-      const ref = `Reference (ln ${err.codeFrame.line}, col ${err.codeFrame.column}):`;
-      const code = this.formatAsMarkdownCodeBlock(err.codeFrame.frame, 'js');
-
-      return {
-        logFormat: 'MARKDOWN',
-        message: `${header}\n\n${location}\n\n${ref}\n\n${code}`,
-      };
-    }
-
-    const fallback = `[${err?.name ?? 'Error'}:${err?.type ?? 'unknown'}] ${err?.message ?? String(err)}`;
-    return { logFormat: 'PLAIN_TEXT', message: fallback };
-  }
 
   private logMessage(
     testId: UUID | null,
@@ -433,7 +443,7 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
 
     // Log body (when available) as Markdown code block.
     if (typeof test.body === 'string' && test.body.trim()) {
-      this.logMessage(newTest, this.formatAsMarkdownCodeBlock(test.body, 'js'), level.INFO, null, 'MARKDOWN');
+      this.logMessage(newTest, formatAsMarkdownCodeBlock(test.body, 'js'), level.INFO, null, 'MARKDOWN');
     }
 
     const fullName = this.getTestFullName(test);
@@ -448,9 +458,9 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
 
     // Keep a mapping so late screenshot events (after test end) can still be attributed correctly.
     // Keys are normalized to match Cypress screenshot filenames.
-    this.indexTestName(newTest, test.title);
+    indexTestName(OrangebeardCypressReporter.testNameToUUID, newTest, test.title);
     if (fullName) {
-      this.indexTestName(newTest, fullName);
+      indexTestName(OrangebeardCypressReporter.testNameToUUID, newTest, fullName);
     }
 
     return newTest;
@@ -465,6 +475,10 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     ) {
       this.finishStep({ status: 'STOPPED' }, unclosedChild.tempId);
     }
+
+    // If Cypress did not emit "log:changed" for some commands (or the test ended abruptly),
+    // make sure we don't leak steps.
+    this.commandStepTracker.cleanupDanglingSteps();
 
     OrangebeardCypressReporter.client!.finishTest(this.getCurrentTestTempId()!, {
       testRunUUID: OrangebeardCypressReporter.testRun!,
@@ -487,7 +501,7 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     } as any);
 
     if (typeof step.body === 'string' && step.body.trim()) {
-      this.logMessage(parentTest, this.formatAsMarkdownCodeBlock(step.body, 'js'), level.INFO, newStep, 'MARKDOWN');
+      this.logMessage(parentTest, formatAsMarkdownCodeBlock(step.body, 'js'), level.INFO, newStep, 'MARKDOWN');
     }
 
     OrangebeardCypressReporter.activeSteps.push({
@@ -524,7 +538,7 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     const screenshotPath = details?.screenshotInfo?.path as string | undefined;
     if (!screenshotPath) return;
 
-    const resolvedTestId = this.resolveTestIdForScreenshotPath(screenshotPath);
+    const resolvedTestId = resolveTestIdForScreenshotPath(OrangebeardCypressReporter.testNameToUUID, screenshotPath);
     const testId = resolvedTestId ?? this.getCurrentTestTempId();
     if (!testId) return;
 
@@ -547,7 +561,7 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     const videoPath = results?.video as string | undefined;
 
     // Always attach video to the spec's *root* suite.
-    const rootSuiteId = this.resolveRootSuiteIdForSpec(spec);
+    const rootSuiteId = resolveRootSuiteIdForSpec(OrangebeardCypressReporter.specSuites, spec);
 
     // Report video unless explicitly disabled.
     const shouldReportVideo = this.options.reportVideo !== false;
@@ -628,31 +642,6 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     return null;
   }
 
-  private indexTestName(testId: UUID, name: string): void {
-    const key = this.normalizeNameKey(name);
-    if (!key) return;
-    OrangebeardCypressReporter.testNameToUUID.set(key, testId);
-
-    // Also index just the last segment of a "suite -- test" name.
-    const last = this.getLastTitleSegment(key);
-    if (last && last !== key) {
-      OrangebeardCypressReporter.testNameToUUID.set(last, testId);
-    }
-  }
-
-  private normalizeNameKey(name: string): string | null {
-    if (typeof name !== 'string') return null;
-    const trimmed = name.trim();
-    if (!trimmed) return null;
-    return trimmed;
-  }
-
-  private getLastTitleSegment(name: string): string | null {
-    // Cypress screenshot titles use " -- " between suite levels.
-    const parts = name.split(' -- ').map((p) => p.trim()).filter(Boolean);
-    if (parts.length === 0) return null;
-    return parts[parts.length - 1];
-  }
 
   private getTestFullName(test: any): string | null {
     // Prefer Cypress-specific titlePath() if present (matches screenshot naming convention)
@@ -673,46 +662,9 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     return null;
   }
 
-  private resolveTestIdForScreenshotPath(screenshotPath: string): UUID | null {
-    const base = path.basename(screenshotPath);
-    const noExt = base.replace(/\.[^.]+$/, '');
-    const withoutFailed = noExt.endsWith(' (failed)') ? noExt.slice(0, -' (failed)'.length) : noExt;
-
-    const key = this.normalizeNameKey(withoutFailed);
-    if (!key) return null;
-
-    // Try full match first.
-    const direct = OrangebeardCypressReporter.testNameToUUID.get(key);
-    if (direct) return direct;
-
-    // Try last segment match.
-    const last = this.getLastTitleSegment(key);
-    if (!last) return null;
-    return OrangebeardCypressReporter.testNameToUUID.get(last) ?? null;
-  }
-
-  private indexSpecSuite(suiteId: UUID, specKey: string): void {
-    const key = this.normalizeSpecKey(specKey);
-    if (!key) return;
-    OrangebeardCypressReporter.specSuites[key] = suiteId;
-
-    const base = this.normalizeSpecKey(path.basename(key));
-    if (base && base !== key) {
-      OrangebeardCypressReporter.specSuites[base] = suiteId;
-    }
-  }
-
-  private normalizeSpecKey(specKey: unknown): string | null {
-    if (typeof specKey !== 'string') return null;
-    const trimmed = specKey.trim();
-    if (!trimmed) return null;
-
-    // Normalize separators so keys match regardless of Windows/posix paths.
-    return trimmed.replace(/\\/g, '/');
-  }
 
   private ensureSpecArtifactsPromise(specKey: string): Promise<void> {
-    const key = this.normalizeSpecKey(specKey);
+    const key = normalizeSpecKey(specKey);
     if (!key) return Promise.resolve();
 
     const existing = OrangebeardCypressReporter.specArtifactsPromises.get(key);
@@ -739,7 +691,7 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     ];
 
     for (const c of candidates) {
-      const key = this.normalizeSpecKey(c);
+      const key = normalizeSpecKey(c);
       if (!key) continue;
 
       const resolveFn = OrangebeardCypressReporter.specArtifactsResolvers.get(key);
@@ -748,7 +700,7 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
         OrangebeardCypressReporter.specArtifactsResolvers.delete(key);
       }
 
-      const base = this.normalizeSpecKey(path.basename(key));
+      const base = normalizeSpecKey(path.basename(key));
       if (base) {
         const resolveBase = OrangebeardCypressReporter.specArtifactsResolvers.get(base);
         if (resolveBase) {
@@ -778,39 +730,6 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     }
   }
 
-  private resolveRootSuiteIdForSpec(spec: any): UUID | null {
-    const candidates: Array<string | undefined> = [
-      spec?.relative,
-      spec?.name,
-      spec?.fileName,
-      spec?.absolute,
-      OrangebeardCypressReporter.activeSpec ?? undefined,
-    ];
-
-    for (const c of candidates) {
-      const key = this.normalizeSpecKey(c);
-      if (!key) continue;
-
-      // Direct key.
-      const direct = OrangebeardCypressReporter.specSuites[key];
-      if (direct) return direct;
-
-      // Try basename.
-      const base = path.basename(key);
-      const baseKey = this.normalizeSpecKey(base);
-      if (baseKey && OrangebeardCypressReporter.specSuites[baseKey]) {
-        return OrangebeardCypressReporter.specSuites[baseKey];
-      }
-
-      // Try stripping common Cypress prefix.
-      const stripped = key.replace(/^cypress\/(e2e|integration)\//, '');
-      if (stripped !== key && OrangebeardCypressReporter.specSuites[stripped]) {
-        return OrangebeardCypressReporter.specSuites[stripped];
-      }
-    }
-
-    return null;
-  }
 
   private getRunnerId(): string | undefined {
     return (
@@ -845,20 +764,5 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
   private static specSuites: SpecSuiteIndex = {};
   private static specArtifactsPromises: Map<string, Promise<void>> = new Map();
   private static specArtifactsResolvers: Map<string, () => void> = new Map();
-  private static testNameToUUID: Map<string, UUID> = new Map();
-}
-
-function createLockFile(tempId: UUID): void {
-  const lockfiles = fs.readdirSync(process.cwd()).filter((f) => f.startsWith('orangebeard-') && f.endsWith('.lock'));
-  if (lockfiles.length > 0) {
-    // eslint-disable-next-line no-console
-    console.warn(`Previous lock file(s) present :${lockfiles}. Is another test run still in progress?`);
-  }
-
-  OrangebeardCypressReporter['lockFileName'] = `orangebeard-${tempId}.lock`;
-  fs.writeFileSync(OrangebeardCypressReporter['lockFileName'], '');
-}
-
-function deleteLockFile(filename: string): void {
-  fs.unlinkSync(filename);
+  private static testNameToUUID: TestNameIndex = new Map();
 }

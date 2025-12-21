@@ -17,8 +17,8 @@ function printUsageAndExit(exitCode: number): never {
   console.error(
     [
       'Usage:',
-      '  ob-cypress start-run [--endpoint <url>] [--token <token>] [--project <project>] [--testset <name>] [--description <text>] [--attributes k=v,k=v]',
-      '  ob-cypress finish-run --testRunUUID <uuid> [--endpoint <url>] [--token <token>] [--project <project>]',
+      '  orangebeard-cy start-run [--endpoint <url>] [--token <token>] [--project <project>] [--testset <name>] [--description <text>] [--attributes k=v,k=v]',
+      '  orangebeard-cy finish-run --testRunUUID <uuid> [--endpoint <url>] [--token <token>] [--project <project>]',
       '',
       'Notes:',
       '  - Any option can be provided via env vars ORANGEBEARD_ENDPOINT, ORANGEBEARD_TOKEN, ORANGEBEARD_PROJECT, ORANGEBEARD_TESTSET.',
