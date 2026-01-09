@@ -147,6 +147,11 @@ These are passed under `reporterOptions` in `cypress.config.*`.
   - If `true` and Cypress has `video: true`, the reporter will attach the per-spec video (`*.mp4`) to the suite for that spec file.
   - If `false`, videos are not attached.
 
+- `cleanupOldLockfiles` (boolean, default: `true`)
+  - If `true`, the reporter will delete any existing `orangebeard-*.lock` files **before** creating its own lockfile.
+  - This prevents Cypress from waiting on stale lockfiles left behind by previous runs that were killed/crashed.
+  - Set to `false` to keep the previous behavior (leave existing lockfiles in place and only warn).
+
 - `parallelMode` (boolean, default: `false`)
   - When `true`, the reporter will **not** finish the test run (because each parallel worker can’t know when the overall run is done).
 
@@ -224,7 +229,30 @@ Workflow:
 ## What gets reported
 - Suites and tests from Mocha
 - Hook failures (before/after)
+- Cypress test tags (see below)
 - `cy.log(...)` output (if `registerOrangebeardCommands()` is enabled)
 - Cypress command steps (if `captureCypressCommandSteps: true`)
 - Screenshots (via `after:screenshot`) attached to the correct failing test
 - Per-spec video files (via `after:spec`) attached to the suite for that spec file (when `video: true` and `reportVideo: true`)
+
+## Cypress tags → Orangebeard attributes
+If you add Cypress tags to a test, they will be sent as Orangebeard **attributes** on the test item.
+
+Example:
+
+```js
+it('adds 2 todos', {
+  tags: [
+    '@some-tag',
+    '@requirement:REQ-123',
+    '@issueURL:https://gitlab.com/project/issues/1234',
+  ],
+}, () => {
+  // ...
+});
+```
+
+Mapping:
+- `@some-tag` → `{ value: 'some-tag' }`
+- `@requirement:REQ-123` → `{ key: 'requirement', value: 'REQ-123' }`
+- `@issueURL:https://gitlab.com/project/issues/1234` → `{ key: 'issueURL', value: 'https://gitlab.com/project/issues/1234' }` -> Will translate to a clickable tag named issueURL.
