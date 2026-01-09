@@ -33,7 +33,7 @@ export function extractCypressTags(test: any): string[] {
     if (typeof c === 'string' && c.trim()) {
       // allow comma-separated string
       for (const part of c.split(',')) {
-        if (typeof part === 'string') add(part);
+          add(part);
       }
     }
   }
@@ -45,7 +45,6 @@ export function tagsToAttributes(tags: string[]): Attribute[] {
   const attrs: Attribute[] = [];
 
   for (const raw of tags) {
-    if (typeof raw !== 'string') continue;
 
     let t = raw.trim();
     if (!t) continue;
