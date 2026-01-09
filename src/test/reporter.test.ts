@@ -11,6 +11,11 @@ import {
 import { CommandStepTracker } from '../reporter/commandStepTracker';
 import { indexSpecSuite, resolveRootSuiteIdForSpec } from '../reporter/specSuiteIndex';
 import { resolveTestIdForScreenshotPath } from '../reporter/testNameIndex';
+import {
+  extractCypressTags,
+  getSuiteAttributesFromTags,
+  getTestAttributesFromTags,
+} from '../reporter/tags';
 
 function resetReporterStatics() {
   const R: any = OrangebeardCypressReporter;
@@ -127,6 +132,38 @@ test('normalizeIncomingLog maps levels and formats non-strings as markdown JSON'
   assert.equal(normalized.level, 'WARN');
   assert.equal(normalized.logFormat, 'MARKDOWN');
   assert.ok(String(normalized.message).includes('```json'));
+});
+
+test('getTestAttributesFromTags maps tags to Orangebeard attributes', () => {
+  const attrs = getTestAttributesFromTags({
+    _testConfig: {
+      tags: ['@high', '@requirement:REQ-201', '@testcase:TC-201-1'],
+    },
+  });
+
+  assert.deepEqual(attrs, [
+    { value: 'high' },
+    { key: 'requirement', value: 'REQ-201' },
+    { key: 'testcase', value: 'TC-201-1' },
+  ]);
+});
+
+test('getSuiteAttributesFromTags maps tags to Orangebeard attributes', () => {
+  const attrs = getSuiteAttributesFromTags({
+    tags: ['@component:ui', '@smoke'],
+  });
+
+  assert.deepEqual(attrs, [{ key: 'component', value: 'ui' }, { value: 'smoke' }]);
+});
+
+test('extractCypressTags merges tags from multiple candidate locations', () => {
+  const tags = extractCypressTags({
+    tags: ['@a', '@b'],
+    config: { tags: '@b, @c' },
+    _testConfig: { tags: ['@c', '@d'] },
+  });
+
+  assert.deepEqual(tags, ['@a', '@b', '@c', '@d']);
 });
 
 test('CommandStepTracker starts and finishes a step', () => {

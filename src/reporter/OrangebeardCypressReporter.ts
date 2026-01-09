@@ -14,6 +14,7 @@ import { CommandStepTracker } from './commandStepTracker';
 import { createLockFile, deleteLockFile } from './lockfile';
 import { indexSpecSuite, normalizeSpecKey, resolveRootSuiteIdForSpec, type SpecSuiteIndex } from './specSuiteIndex';
 import { indexTestName, resolveTestIdForNameKey, resolveTestIdForScreenshotPath, type TestNameIndex } from './testNameIndex';
+import { getTestAttributesFromTags } from './tags';
 
 type CypressReporterConfiguration = {
   reporterOptions?: Record<string, any>;
@@ -338,7 +339,9 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
       }),
     ) as UUID;
 
-    OrangebeardCypressReporter.lockFileName = createLockFile(OrangebeardCypressReporter.testRun);
+    OrangebeardCypressReporter.lockFileName = createLockFile(OrangebeardCypressReporter.testRun, {
+      cleanupOldLockfiles: this.options.cleanupOldLockfiles,
+    });
   }
 
   private joinExistingRun(testRunUUID: UUID): void {
@@ -433,12 +436,15 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     const parent = this.getCurrentSuiteTempId();
     if (!parent) return undefined;
 
+    const attributes = getTestAttributesFromTags(test);
+
     const newTest = OrangebeardCypressReporter.client!.startTest({
       testRunUUID: OrangebeardCypressReporter.testRun!,
       suiteUUID: parent,
       testName: test.title,
       testType: type,
       startTime: getTime(),
+      attributes: attributes.length > 0 ? attributes : undefined,
     } as any);
 
     // Log body (when available) as Markdown code block.
