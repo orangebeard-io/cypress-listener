@@ -54,6 +54,26 @@ test('resolveTestset precedence: client > reporterOptions > env', () => {
   delete process.env.ORANGEBEARD_TESTSET;
 });
 
+test('isExplicitlyDisabled respects reporterOptions.disabled and ORANGEBEARD_DISABLED env var', () => {
+  delete process.env.ORANGEBEARD_DISABLED;
+  const reporter: any = makeReporterWithOptions({});
+  assert.equal(reporter.isExplicitlyDisabled(), false);
+
+  reporter.options = { disabled: true };
+  assert.equal(reporter.isExplicitlyDisabled(), true);
+
+  reporter.options = { disabled: false };
+  assert.equal(reporter.isExplicitlyDisabled(), false);
+
+  process.env.ORANGEBEARD_DISABLED = 'true';
+  assert.equal(reporter.isExplicitlyDisabled(), true);
+
+  process.env.ORANGEBEARD_DISABLED = '0';
+  assert.equal(reporter.isExplicitlyDisabled(), false);
+
+  delete process.env.ORANGEBEARD_DISABLED;
+});
+
 test('formatAsMarkdownCodeBlock wraps and escapes fences', () => {
   const md = formatAsMarkdownCodeBlock('line1\n```\nline2', 'js');
   assert.ok(md.startsWith('```js\n'));

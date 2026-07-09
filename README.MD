@@ -30,7 +30,7 @@
 Install the package in your Cypress project:
 
 ```shell
-npm install --save-dev @orangebeard-io/cypress-listener
+npm install --save-dev @orangebeard-io/cypress-listener --save-dev
 ```
 
 ## Quick start (step-by-step)
@@ -142,6 +142,11 @@ registerOrangebeardCommands();
 ## Options
 ### Reporter options (`reporterOptions`)
 These are passed under `reporterOptions` in `cypress.config.*`.
+
+- `disabled` (boolean, default: `false`)
+  - If `true`, the reporter does nothing for the whole process: no Orangebeard client/config is created, no
+    IPC server is started, and no test run is created. Can also be set via the `ORANGEBEARD_DISABLED`
+    environment variable (`true`/`1`).
 
 - `reportVideo` (boolean, default: `true`)
   - If `true` and Cypress has `video: true`, the reporter will attach the per-spec video (`*.mp4`) to the suite for that spec file.
