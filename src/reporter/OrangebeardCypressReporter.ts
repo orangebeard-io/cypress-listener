@@ -16,6 +16,8 @@ import { indexSpecSuite, normalizeSpecKey, resolveRootSuiteIdForSpec, type SpecS
 import { indexTestName, resolveTestIdForNameKey, resolveTestIdForScreenshotPath, type TestNameIndex } from './testNameIndex';
 import { getTestAttributesFromTags } from './tags';
 
+const LISTENER_ID = '@orangebeard-io/cypress-listener';
+
 type CypressReporterConfiguration = {
   reporterOptions?: Record<string, any>;
 };
@@ -61,12 +63,22 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     // parallel mode: join an existing run rather than creating/finishing it
     this.isParallel = Boolean(this.options.testRunUUID || this.options.parallelMode);
 
+    // Explicit opt-out (reporterOptions.disabled or ORANGEBEARD_DISABLED). Checked before we touch
+    // the Orangebeard client/config at all, so a disabled run does no autoConfig/network work.
+    if (!OrangebeardCypressReporter.disabled && this.isExplicitlyDisabled()) {
+      OrangebeardCypressReporter.disabled = true;
+    }
+
+    if (OrangebeardCypressReporter.disabled) {
+      return;
+    }
+
     // init singleton client/config once per process
     if (!OrangebeardCypressReporter.client) {
       OrangebeardCypressReporter.client =
         !Object.keys(this.options).length
-          ? new OrangebeardAsyncV3Client()
-          : new OrangebeardAsyncV3Client(getOrangebeardClientSettings(configuration));
+          ? new OrangebeardAsyncV3Client(undefined, LISTENER_ID)
+          : new OrangebeardAsyncV3Client(getOrangebeardClientSettings(configuration), LISTENER_ID);
 
       OrangebeardCypressReporter.configuration = configuration;
     }
@@ -629,6 +641,15 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
 
     const clientAny = OrangebeardCypressReporter.client! as any;
     await Promise.all(Object.values(clientAny.promises ?? {}));
+  }
+
+  private isExplicitlyDisabled(): boolean {
+    if (this.options?.disabled === true) return true;
+
+    const fromEnv = process.env.ORANGEBEARD_DISABLED;
+    if (typeof fromEnv === 'string' && /^(1|true)$/i.test(fromEnv.trim())) return true;
+
+    return false;
   }
 
   private resolveTestset(): string | null {
