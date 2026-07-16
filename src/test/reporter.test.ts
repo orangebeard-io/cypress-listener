@@ -23,6 +23,12 @@ function resetReporterStatics() {
   R.testNameToUUID = new Map();
   R.activeSpec = null;
   R.client = { config: {} };
+  R.disabled = false;
+  R.testRun = null;
+  R.testRunFinished = false;
+  R.lockFileName = null;
+  R.currentRun = 0;
+  R.totalNumberOfRuns = 0;
 }
 
 function makeReporterWithOptions(options: Record<string, any> = {}) {
@@ -72,6 +78,108 @@ test('isExplicitlyDisabled respects reporterOptions.disabled and ORANGEBEARD_DIS
   assert.equal(reporter.isExplicitlyDisabled(), false);
 
   delete process.env.ORANGEBEARD_DISABLED;
+});
+
+test('finalizeRun(force=true) finishes the run even when the spec-count heuristic never matches (--spec subset)', async () => {
+  resetReporterStatics();
+  const R: any = OrangebeardCypressReporter;
+  const finishCalls: any[] = [];
+
+  R.testRun = 'run-uuid';
+  // Simulates `cypress run --spec <subset>`: only 1 spec actually ran in this process,
+  // but the full project's specPattern still matches 50 files.
+  R.currentRun = 1;
+  R.totalNumberOfRuns = 50;
+  R.client = {
+    finishTestRun: async (uuid: string, payload: any) => {
+      finishCalls.push([uuid, payload]);
+    },
+  };
+
+  const reporter: any = makeReporterWithOptions({});
+  reporter.isParallel = false;
+
+  // The old spec-count heuristic alone would never consider this the last spec.
+  await reporter.finalizeRun();
+  assert.equal(finishCalls.length, 0);
+
+  // The plugin's after:run signal is authoritative and must finish the run regardless.
+  await reporter.finalizeRun(true);
+  assert.equal(finishCalls.length, 1);
+  assert.equal(finishCalls[0][0], 'run-uuid');
+});
+
+test('finalizeRun only finishes the run once, even if called again after the fact', async () => {
+  resetReporterStatics();
+  const R: any = OrangebeardCypressReporter;
+  const finishCalls: any[] = [];
+
+  R.testRun = 'run-uuid';
+  R.currentRun = 1;
+  R.totalNumberOfRuns = 1;
+  R.client = {
+    finishTestRun: async () => {
+      finishCalls.push(1);
+    },
+  };
+
+  const reporter: any = makeReporterWithOptions({});
+  reporter.isParallel = false;
+
+  // Normal (non-subset) run: the spec-count heuristic finishes it on the last spec.
+  await reporter.finalizeRun();
+  assert.equal(finishCalls.length, 1);
+
+  // The plugin's after:run RUN_END signal arrives afterwards; must be a no-op.
+  await reporter.finalizeRun(true);
+  assert.equal(finishCalls.length, 1);
+});
+
+test('finalizeRun never finishes the run in parallel mode, even when forced', async () => {
+  resetReporterStatics();
+  const R: any = OrangebeardCypressReporter;
+  const finishCalls: any[] = [];
+  const flushCalls: any[] = [];
+
+  R.testRun = 'run-uuid';
+  R.client = {
+    finishTestRun: async () => {
+      finishCalls.push(1);
+    },
+  };
+
+  const reporter: any = makeReporterWithOptions({ parallelMode: true });
+  reporter.isParallel = true;
+  reporter.flushClient = async () => {
+    flushCalls.push(1);
+  };
+
+  await reporter.finalizeRun(true);
+
+  assert.equal(finishCalls.length, 0);
+  assert.equal(flushCalls.length, 1);
+});
+
+test('finalizeRun does nothing when the reporter is disabled', async () => {
+  resetReporterStatics();
+  const R: any = OrangebeardCypressReporter;
+  const finishCalls: any[] = [];
+
+  R.disabled = true;
+  R.testRun = 'run-uuid';
+  R.currentRun = 1;
+  R.totalNumberOfRuns = 1;
+  R.client = {
+    finishTestRun: async () => {
+      finishCalls.push(1);
+    },
+  };
+
+  const reporter: any = makeReporterWithOptions({});
+  reporter.isParallel = false;
+
+  await reporter.finalizeRun(true);
+  assert.equal(finishCalls.length, 0);
 });
 
 test('formatAsMarkdownCodeBlock wraps and escapes fences', () => {

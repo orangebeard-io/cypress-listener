@@ -140,6 +140,14 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
           this.signalSpecArtifacts(details?.spec);
           this.track(this.reportSpecArtifacts(details));
         });
+
+        // Authoritative "all specs in this process are done" signal from the plugin's
+        // after:run hook. Unlike the currentRun/totalNumberOfRuns heuristic below, this
+        // is unaffected by `--spec` subsets, so it's what actually finishes the run when
+        // that heuristic never matches.
+        server.on(IPC_EVENTS.RUN_END, () => {
+          this.track(this.finalizeRun(true));
+        });
       },
       (server) => {
         server.off(IPC_EVENTS.CONFIG, '*');
@@ -147,6 +155,7 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
         server.off(IPC_EVENTS.COMMAND_STEP, '*');
         server.off(IPC_EVENTS.SCREENSHOT, '*');
         server.off(IPC_EVENTS.SPEC_ARTIFACTS, '*');
+        server.off(IPC_EVENTS.RUN_END, '*');
       },
     );
 
@@ -305,31 +314,51 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
         await this.waitForSpecArtifacts(15000);
       }
 
-      // Always wait for async work (file IO, IPC callbacks, etc.) to complete *before*
-      // we attempt to flush/finish the run.
-      await this.awaitInflight();
-
-      // Parallel runners never finish the run; they only flush.
-      if (this.isParallel) {
-        await this.flushClient();
-        return;
-      }
-
-      if (OrangebeardCypressReporter.currentRun !== OrangebeardCypressReporter.totalNumberOfRuns) {
-        return;
-      }
-
-      // Wait again in case late plugin events (like after:spec artifacts) are still in-flight.
-      await this.awaitInflight();
-
-      await OrangebeardCypressReporter.client!.finishTestRun(OrangebeardCypressReporter.testRun!, {
-        endTime: getTime(),
-      } as any);
-
-      if (OrangebeardCypressReporter.lockFileName) {
-        deleteLockFile(OrangebeardCypressReporter.lockFileName);
-      }
+      // Best-effort: finish now if the (fragile) spec-count heuristic says this was the
+      // last spec. If it's wrong (e.g. a `--spec` subset), the plugin's after:run RUN_END
+      // signal calls finalizeRun(true) once the whole process is actually done.
+      await this.finalizeRun();
     });
+  }
+
+  /**
+   * Finishes (or, in parallel mode, flushes) the Orangebeard test run. Safe to call more
+   * than once - only the first call that actually finishes the run has any effect.
+   *
+   * @param force Skip the currentRun/totalNumberOfRuns heuristic and finish unconditionally.
+   *   Used when the plugin's after:run hook signals that this process is genuinely done,
+   *   which is authoritative where the heuristic can be wrong (e.g. `cypress run --spec`
+   *   subsets, where totalNumberOfRuns is computed from the full project's specPattern).
+   */
+  private async finalizeRun(force = false): Promise<void> {
+    if (OrangebeardCypressReporter.disabled) return;
+
+    // Always wait for async work (file IO, IPC callbacks, etc.) to complete *before*
+    // we attempt to flush/finish the run.
+    await this.awaitInflight();
+
+    // Parallel runners never finish the run; they only flush. A coordinator finishes the
+    // shared run once via `orangebeard-cy finish-run`.
+    if (this.isParallel) {
+      await this.flushClient();
+      return;
+    }
+
+    if (!force && OrangebeardCypressReporter.currentRun !== OrangebeardCypressReporter.totalNumberOfRuns) {
+      return;
+    }
+
+    if (OrangebeardCypressReporter.testRunFinished || !OrangebeardCypressReporter.testRun) return;
+    OrangebeardCypressReporter.testRunFinished = true;
+
+    await OrangebeardCypressReporter.client!.finishTestRun(OrangebeardCypressReporter.testRun, {
+      endTime: getTime(),
+    } as any);
+
+    if (OrangebeardCypressReporter.lockFileName) {
+      deleteLockFile(OrangebeardCypressReporter.lockFileName);
+      OrangebeardCypressReporter.lockFileName = null;
+    }
   }
 
   private startTestRun(): void {
@@ -777,6 +806,7 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
   private static totalNumberOfRuns = 0;
 
   private static testRun: UUID | null = null;
+  private static testRunFinished = false;
   private static client: OrangebeardAsyncV3Client | null = null;
   private static configuration: CypressReporterConfiguration | null = null;
   private static cypressConfig: any;
