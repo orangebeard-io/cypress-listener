@@ -161,6 +161,33 @@ test('finalizeRun never finishes the run in parallel mode, even when forced', as
   assert.equal(flushCalls.length, 1);
 });
 
+test('regression: joinExistingRun never calls startAnnouncedTestRun (parallel workers must not re-start the coordinator-owned run)', () => {
+  // Every parallel worker joins the same shared run via reporterOptions.testRunUUID. The run
+  // was already started once by the coordinator (`orangebeard-cy start-run`); a worker calling
+  // a test-run/start(-related) endpoint again for that same UUID corrupts/loses data server-side.
+  resetReporterStatics();
+  const R: any = OrangebeardCypressReporter;
+  const startAnnouncedCalls: any[] = [];
+
+  R.client = {
+    promises: {},
+    uuidMap: {},
+    startAnnouncedTestRun: (...args: any[]) => startAnnouncedCalls.push(args),
+  };
+
+  const reporter: any = makeReporterWithOptions({});
+  const lockPath = path.join(process.cwd(), 'orangebeard-shared-run-uuid.lock');
+
+  try {
+    reporter.joinExistingRun('shared-run-uuid');
+
+    assert.equal(startAnnouncedCalls.length, 0);
+    assert.equal(R.testRun, 'shared-run-uuid');
+  } finally {
+    if (fs.existsSync(lockPath)) fs.unlinkSync(lockPath);
+  }
+});
+
 test('regression: parallel mode keeps its lockfile alive until the forced (RUN_END) flush, not every per-spec flush', async () => {
   // Without a lockfile, the plugin's after:run hook has nothing to wait for and Cypress can
   // exit before a parallel worker's screenshot/video/log uploads actually finish, leaving the

@@ -406,8 +406,9 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     clientAny.promises[testRunUUID] = Promise.resolve(testRunUUID);
     clientAny.uuidMap[testRunUUID] = testRunUUID;
 
-    // Announce/join (best-effort). Even if this fails, reporting can still proceed.
-    OrangebeardCypressReporter.client!.startAnnouncedTestRun(testRunUUID);
+    // Deliberately no test-run/start(-related) call here: the run was already started once
+    // by the coordinator (`orangebeard-cy start-run`). Every parallel worker calling that
+    // endpoint again for the same shared run corrupts/loses data server-side.
 
     OrangebeardCypressReporter.testRun = testRunUUID;
 
