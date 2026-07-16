@@ -115,7 +115,9 @@ module.exports = defineConfig({
   },
   e2e: {
     setupNodeEvents(on, config) {
-      // Required: registers tasks + screenshot/video forwarding + (by default) waits for lockfiles in after:run
+      // Required: registers tasks + screenshot/video forwarding, and signals the reporter
+      // when the run is done so it can finish the Orangebeard test run. Without this,
+      // the test run is never marked finished (it stays open in Orangebeard).
       registerOrangebeardPlugin(on, config);
       return config;
     },
@@ -203,13 +205,15 @@ cypress run
 ```
 
 ### Running a subset of specs
-Cypress does not always pass `--spec` through to the reporter, so if you run a subset you should prefer `--config specPattern=...`.
-
-Example:
-
 ```shell
-cypress run --browser chrome --config "specPattern=cypress/e2e/somespec/*.cy.js"
+cypress run --spec "cypress/e2e/somespec/*.cy.js"
 ```
+
+The reporter estimates how many specs will run so it knows when the last one has finished, but
+that estimate can't always account for `--spec` filtering. To cover that case, the plugin's
+`after:run` hook (registered via `registerOrangebeardPlugin`, see below) tells the reporter when
+Cypress is actually done, so the run is finished correctly either way - **as long as the plugin
+is registered**. Without it, the test run will never be marked finished in Orangebeard.
 
 ## Parallel execution (Cypress Cloud)
 When running Cypress in parallel across multiple CI machines, each machine runs its own `cypress run` process, so the reporter cannot reliably know which runner is "last".
