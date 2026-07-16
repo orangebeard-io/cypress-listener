@@ -145,8 +145,15 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
         // after:run hook. Unlike the currentRun/totalNumberOfRuns heuristic below, this
         // is unaffected by `--spec` subsets, so it's what actually finishes the run when
         // that heuristic never matches.
+        //
+        // Deliberately NOT routed through track(): finalizeRun() itself awaits the
+        // `inflight` set, so adding its own promise to that same set before it resolves
+        // would make it wait on itself forever.
         server.on(IPC_EVENTS.RUN_END, () => {
-          this.track(this.finalizeRun(true));
+          this.finalizeRun(true).catch((err) => {
+            // eslint-disable-next-line no-console
+            console.error('[Orangebeard] Failed to finish test run after Cypress run completed:', err);
+          });
         });
       },
       (server) => {

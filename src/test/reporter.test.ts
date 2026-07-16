@@ -182,6 +182,41 @@ test('finalizeRun does nothing when the reporter is disabled', async () => {
   assert.equal(finishCalls.length, 0);
 });
 
+test('regression: finalizeRun must resolve promptly even with unrelated work still in-flight', async () => {
+  // Guards against reintroducing a self-referential deadlock: finalizeRun() awaits the
+  // `inflight` set internally, so the RUN_END handler must never route its own promise
+  // through track() (that would add finalizeRun's own promise to the very set it awaits,
+  // which never resolves). This test exercises finalizeRun() the way the RUN_END handler
+  // does - directly, not tracked - while other genuine work is in-flight, and fails by
+  // timing out if that constraint is ever violated again.
+  resetReporterStatics();
+  const R: any = OrangebeardCypressReporter;
+  const finishCalls: any[] = [];
+
+  R.testRun = 'run-uuid';
+  R.currentRun = 1;
+  R.totalNumberOfRuns = 50;
+  R.client = {
+    finishTestRun: async () => {
+      finishCalls.push(1);
+    },
+  };
+
+  const reporter: any = makeReporterWithOptions({});
+  reporter.isParallel = false;
+
+  // Some other async work (e.g. a screenshot upload) is genuinely in-flight.
+  reporter.track(new Promise((resolve) => setTimeout(resolve, 10)));
+
+  const winner = await Promise.race([
+    reporter.finalizeRun(true).then(() => 'resolved'),
+    new Promise((resolve) => setTimeout(() => resolve('timeout'), 1000)),
+  ]);
+
+  assert.equal(winner, 'resolved');
+  assert.equal(finishCalls.length, 1);
+});
+
 test('formatAsMarkdownCodeBlock wraps and escapes fences', () => {
   const md = formatAsMarkdownCodeBlock('line1\n```\nline2', 'js');
   assert.ok(md.startsWith('```js\n'));
