@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import OrangebeardClient from '@orangebeard-io/javascript-client/dist/client/OrangebeardClient';
 
 import { getTime } from './utils';
