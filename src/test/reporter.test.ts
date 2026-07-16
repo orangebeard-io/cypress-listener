@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import OrangebeardCypressReporter from '../reporter/OrangebeardCypressReporter';
@@ -158,6 +159,38 @@ test('finalizeRun never finishes the run in parallel mode, even when forced', as
 
   assert.equal(finishCalls.length, 0);
   assert.equal(flushCalls.length, 1);
+});
+
+test('regression: parallel mode keeps its lockfile alive until the forced (RUN_END) flush, not every per-spec flush', async () => {
+  // Without a lockfile, the plugin's after:run hook has nothing to wait for and Cypress can
+  // exit before a parallel worker's screenshot/video/log uploads actually finish, leaving the
+  // shared Orangebeard run with missing/interrupted items even though `finish-run` succeeds.
+  resetReporterStatics();
+  const R: any = OrangebeardCypressReporter;
+
+  R.testRun = 'run-uuid';
+  R.client = { finishTestRun: async () => {} };
+
+  const lockPath = path.join(process.cwd(), 'orangebeard-regression-test.lock');
+  fs.writeFileSync(lockPath, '');
+  R.lockFileName = lockPath;
+
+  const reporter: any = makeReporterWithOptions({ parallelMode: true });
+  reporter.isParallel = true;
+  reporter.flushClient = async () => {};
+
+  try {
+    // A per-spec (non-forced) flush must not remove the lockfile - later specs in the same
+    // job may still have work in flight.
+    await reporter.finalizeRun();
+    assert.ok(fs.existsSync(lockPath), 'lockfile must survive a non-forced per-spec flush');
+
+    // The RUN_END-triggered (forced) flush is authoritative: the whole process is done.
+    await reporter.finalizeRun(true);
+    assert.ok(!fs.existsSync(lockPath), 'lockfile must be removed once the forced flush completes');
+  } finally {
+    if (fs.existsSync(lockPath)) fs.unlinkSync(lockPath);
+  }
 });
 
 test('finalizeRun does nothing when the reporter is disabled', async () => {

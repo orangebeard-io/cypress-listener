@@ -348,6 +348,14 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     // shared run once via `orangebeard-cy finish-run`.
     if (this.isParallel) {
       await this.flushClient();
+
+      // Only remove the lockfile once we know for sure this process is done (the `force`
+      // signal from after:run) - not after every spec, or a job with multiple specs would
+      // let Cypress exit while later specs' flush is still in flight.
+      if (force && OrangebeardCypressReporter.lockFileName) {
+        deleteLockFile(OrangebeardCypressReporter.lockFileName);
+        OrangebeardCypressReporter.lockFileName = null;
+      }
       return;
     }
 
@@ -402,6 +410,12 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     OrangebeardCypressReporter.client!.startAnnouncedTestRun(testRunUUID);
 
     OrangebeardCypressReporter.testRun = testRunUUID;
+
+    // Without a lockfile, the plugin's after:run hook has nothing to wait for, and Cypress
+    // can force-exit before this worker's screenshot/video/log uploads actually finish.
+    OrangebeardCypressReporter.lockFileName = createLockFile(testRunUUID, {
+      cleanupOldLockfiles: this.options.cleanupOldLockfiles,
+    });
   }
 
   private static numberOfRuns(): void {
