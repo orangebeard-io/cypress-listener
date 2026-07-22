@@ -269,7 +269,7 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     });
 
     this.runner.on(Mocha.Runner.constants.EVENT_TEST_PENDING, (test: any) => {
-      this.finishTest(test, true);
+      this.reportPendingTest(test);
     });
 
     this.runner.on(Mocha.Runner.constants.EVENT_HOOK_BEGIN, (hook: any) => {
@@ -536,6 +536,8 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
   }
 
   private finishTest(test: any, skipped = false): void {
+    if (!this.getCurrentTestTempId()) return;
+
     let unclosedChild: ActiveItem | undefined;
     while (
       (unclosedChild = OrangebeardCypressReporter.activeSteps.find(
@@ -556,6 +558,16 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     } as any);
 
     OrangebeardCypressReporter.activeTests.pop();
+  }
+
+  // Mocha never emits EVENT_TEST_BEGIN for a statically-skipped test (it.skip(...), a
+  // grep/tag plugin's skip, etc.) - only EVENT_TEST_PENDING. Register it first so it's
+  // actually reported to Orangebeard, then immediately close it out as SKIPPED.
+  private reportPendingTest(test: any): void {
+    if (OrangebeardCypressReporter.activeTests.find((t) => t.cyId === test.id) === undefined) {
+      this.startTest(test, testEntity.TEST);
+    }
+    this.finishTest(test, true);
   }
 
   private startStep(step: any): UUID | undefined {
