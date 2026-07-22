@@ -389,6 +389,48 @@ test('extractCypressTags merges tags from multiple candidate locations', () => {
   assert.deepEqual(tags, ['@a', '@b', '@c', '@d']);
 });
 
+test('regression: statically-skipped tests (EVENT_TEST_PENDING with no prior EVENT_TEST_BEGIN) are still registered and reported as SKIPPED', () => {
+  // Mocha never emits EVENT_TEST_BEGIN for a test skipped via it.skip(...) - only
+  // EVENT_TEST_PENDING. The reporter used to only call finishTest() in that handler, which
+  // (a) never registered the test with Orangebeard at all, and (b) crashed downstream in the
+  // async client, since finishTest(null, ...) has no matching startTest promise to resolve
+  // against ("Cannot read properties of undefined (reading 'then')").
+  resetReporterStatics();
+  const R: any = OrangebeardCypressReporter;
+
+  const startCalls: any[] = [];
+  const finishCalls: any[] = [];
+
+  R.testRun = 'run-uuid';
+  R.activeSuites = [{ tempId: 'suite-uuid', name: 'My Suite', cyId: 's1' }];
+  R.activeTests = [];
+  R.activeSteps = [];
+  R.client = {
+    startTest: (payload: any) => {
+      startCalls.push(payload);
+      return 'test-uuid';
+    },
+    finishTest: (id: string, payload: any) => {
+      finishCalls.push([id, payload]);
+    },
+  };
+
+  const reporter: any = makeReporterWithOptions({});
+  reporter.commandStepTracker = { cleanupDanglingSteps: () => {} };
+
+  reporter.reportPendingTest({ title: 'a skipped test', id: 't1' });
+
+  assert.equal(startCalls.length, 1, 'startTest must be called so the skipped test is actually registered');
+  assert.equal(startCalls[0].suiteUUID, 'suite-uuid');
+  assert.equal(startCalls[0].testName, 'a skipped test');
+
+  assert.equal(finishCalls.length, 1);
+  assert.equal(finishCalls[0][0], 'test-uuid');
+  assert.equal(finishCalls[0][1].status, 'SKIPPED');
+
+  assert.equal(R.activeTests.length, 0, 'the test must be popped off the active stack after finishing');
+});
+
 test('CommandStepTracker starts and finishes a step', () => {
   const calls: any[] = [];
 
