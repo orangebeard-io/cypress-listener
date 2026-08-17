@@ -236,7 +236,7 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     });
 
     this.runner.on(Mocha.Runner.constants.EVENT_TEST_BEGIN, (test: any) => {
-      this.startTest(test, testEntity.TEST);
+      this.handleTestBegin(test);
     });
 
     this.runner.on(Mocha.Runner.constants.EVENT_TEST_PASS, (test: any) => {
@@ -493,6 +493,16 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     };
 
     OrangebeardCypressReporter.client!.sendAttachment(payload);
+  }
+
+  // Cypress (unlike vanilla Mocha) still fires EVENT_TEST_BEGIN for a statically-skipped test
+  // (it.skip(...), a grep/tag plugin's skip, etc.), *after* EVENT_TEST_PENDING has already
+  // reported it as SKIPPED via reportPendingTest(). Starting it again here would leave a
+  // second, orphaned "started" test item that never gets finished (and drags the whole run's
+  // status down to STOPPED).
+  private handleTestBegin(test: any): void {
+    if (test.pending) return;
+    this.startTest(test, testEntity.TEST);
   }
 
   private startTest(test: any, type: string): UUID | undefined {

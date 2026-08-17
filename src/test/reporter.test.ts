@@ -431,6 +431,46 @@ test('regression: statically-skipped tests (EVENT_TEST_PENDING with no prior EVE
   assert.equal(R.activeTests.length, 0, 'the test must be popped off the active stack after finishing');
 });
 
+test('regression: Cypress re-firing EVENT_TEST_BEGIN after EVENT_TEST_PENDING for a statically-skipped test must not re-open it', () => {
+  // Unlike vanilla Mocha, Cypress still fires EVENT_TEST_BEGIN for a statically-skipped test
+  // (test.pending === true) right after EVENT_TEST_PENDING already reported it as SKIPPED via
+  // reportPendingTest(). The old handler unconditionally called startTest() on every
+  // EVENT_TEST_BEGIN, which registered a second, orphaned "started" test that was never
+  // finished - dragging the whole run's status down to STOPPED.
+  resetReporterStatics();
+  const R: any = OrangebeardCypressReporter;
+
+  const startCalls: any[] = [];
+  const finishCalls: any[] = [];
+
+  R.testRun = 'run-uuid';
+  R.activeSuites = [{ tempId: 'suite-uuid', name: 'My Suite', cyId: 's1' }];
+  R.activeTests = [];
+  R.activeSteps = [];
+  R.client = {
+    startTest: (payload: any) => {
+      startCalls.push(payload);
+      return 'test-uuid';
+    },
+    finishTest: (id: string, payload: any) => {
+      finishCalls.push([id, payload]);
+    },
+  };
+
+  const reporter: any = makeReporterWithOptions({});
+  reporter.commandStepTracker = { cleanupDanglingSteps: () => {} };
+
+  const test = { title: 'a skipped test', id: 't1', pending: true };
+
+  reporter.reportPendingTest(test); // EVENT_TEST_PENDING
+  reporter.handleTestBegin(test); // Cypress's spurious follow-up EVENT_TEST_BEGIN
+
+  assert.equal(startCalls.length, 1, 'startTest must only be called once, from reportPendingTest');
+  assert.equal(finishCalls.length, 1);
+  assert.equal(finishCalls[0][1].status, 'SKIPPED');
+  assert.equal(R.activeTests.length, 0, 'no dangling "started" test must be left on the active stack');
+});
+
 test('CommandStepTracker starts and finishes a step', () => {
   const calls: any[] = [];
 
