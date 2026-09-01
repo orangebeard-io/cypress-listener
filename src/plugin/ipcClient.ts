@@ -1,19 +1,24 @@
 import ipc from 'node-ipc';
 
 import { IPC_EVENTS } from '../ipcEvents';
+import { getClientIpcChannelId } from '../ipcChannelId';
 
 export function connectIPCClient(config: any): void {
-  (ipc as any).config.id = 'orangebeard';
+  const channelId = getClientIpcChannelId();
+
+  (ipc as any).config.id = channelId;
   (ipc as any).config.retry = 1500;
   (ipc as any).config.silent = true;
 
-  (ipc as any).connectTo('orangebeard', () => {
-    (ipc as any).of.orangebeard.on('connect', () => {
+  (ipc as any).connectTo(channelId, () => {
+    const channel = (ipc as any).of[channelId];
+
+    channel.on('connect', () => {
       (ipc as any).log('Orangebeard connected');
-      (ipc as any).of.orangebeard.emit(IPC_EVENTS.CONFIG, config);
+      channel.emit(IPC_EVENTS.CONFIG, config);
     });
 
-    (ipc as any).of.orangebeard.on('disconnect', () => {
+    channel.on('disconnect', () => {
       (ipc as any).log('Orangebeard disconnected');
     });
 
@@ -23,8 +28,8 @@ export function connectIPCClient(config: any): void {
     // inside Cypress's own task/hook callbacks). Since node-ipc preserves per-direction
     // message order on one connection, the reporter receiving this ack proves it has already
     // received (and dispatched the handler for) everything sent before it.
-    (ipc as any).of.orangebeard.on(IPC_EVENTS.FLUSH, (payload: any) => {
-      (ipc as any).of.orangebeard.emit(IPC_EVENTS.FLUSH_ACK, { id: payload?.id });
+    channel.on(IPC_EVENTS.FLUSH, (payload: any) => {
+      channel.emit(IPC_EVENTS.FLUSH_ACK, { id: payload?.id });
     });
   });
 }
