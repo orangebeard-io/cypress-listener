@@ -1,4 +1,4 @@
-import { UUID } from 'crypto';
+import { randomUUID, UUID } from 'crypto';
 import * as path from 'node:path';
 
 import Mocha from 'mocha';
@@ -108,12 +108,17 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     // receive plugin events (logs, screenshots, etc.) from browser-side Cypress runtime
     startIPCServer(
       (server) => {
-        server.on(IPC_EVENTS.CONFIG, (cypressFullConfig: any) => {
+        OrangebeardCypressReporter.ipcServerRef = server;
+
+        server.on(IPC_EVENTS.CONFIG, (cypressFullConfig: any, socket: any) => {
+          OrangebeardCypressReporter.ipcSocket = socket;
           OrangebeardCypressReporter.cypressConfig = cypressFullConfig;
           OrangebeardCypressReporter.numberOfRuns();
         });
 
-        server.on(IPC_EVENTS.LOG, (log: any) => {
+        server.on(IPC_EVENTS.LOG, (log: any, socket: any) => {
+          OrangebeardCypressReporter.ipcSocket = socket;
+
           const testId = this.getCurrentTestTempId();
           if (!testId) return;
 
@@ -127,18 +132,35 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
           );
         });
 
-        server.on(IPC_EVENTS.COMMAND_STEP, (evt: any) => {
+        server.on(IPC_EVENTS.COMMAND_STEP, (evt: any, socket: any) => {
+          OrangebeardCypressReporter.ipcSocket = socket;
           // Synchronous, but keep inflight contract consistent.
           this.track(Promise.resolve().then(() => this.commandStepTracker.handleEvent(evt)));
         });
 
-        server.on(IPC_EVENTS.SCREENSHOT, (details: any) => {
+        server.on(IPC_EVENTS.SCREENSHOT, (details: any, socket: any) => {
+          OrangebeardCypressReporter.ipcSocket = socket;
           this.track(this.reportScreenshot(details));
         });
 
-        server.on(IPC_EVENTS.SPEC_ARTIFACTS, (details: any) => {
+        server.on(IPC_EVENTS.SPEC_ARTIFACTS, (details: any, socket: any) => {
+          OrangebeardCypressReporter.ipcSocket = socket;
           this.signalSpecArtifacts(details?.spec);
           this.track(this.reportSpecArtifacts(details));
+        });
+
+        // Answers requestFlushAck(): resolves the matching pending promise so finalizeRun()
+        // knows every message the plugin sent before this ack has already been received and
+        // dispatched. See requestFlushAck() for why this proves that.
+        server.on(IPC_EVENTS.FLUSH_ACK, (payload: any, socket: any) => {
+          OrangebeardCypressReporter.ipcSocket = socket;
+
+          const id = payload?.id;
+          const resolve = OrangebeardCypressReporter.pendingFlushAcks.get(id);
+          if (resolve) {
+            OrangebeardCypressReporter.pendingFlushAcks.delete(id);
+            resolve();
+          }
         });
 
         // Authoritative "all specs in this process are done" signal from the plugin's
@@ -149,7 +171,8 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
         // Deliberately NOT routed through track(): finalizeRun() itself awaits the
         // `inflight` set, so adding its own promise to that same set before it resolves
         // would make it wait on itself forever.
-        server.on(IPC_EVENTS.RUN_END, () => {
+        server.on(IPC_EVENTS.RUN_END, (_payload: any, socket: any) => {
+          OrangebeardCypressReporter.ipcSocket = socket;
           this.finalizeRun(true).catch((err) => {
             // eslint-disable-next-line no-console
             console.error('[Orangebeard] Failed to finish test run after Cypress run completed:', err);
@@ -162,6 +185,7 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
         server.off(IPC_EVENTS.COMMAND_STEP, '*');
         server.off(IPC_EVENTS.SCREENSHOT, '*');
         server.off(IPC_EVENTS.SPEC_ARTIFACTS, '*');
+        server.off(IPC_EVENTS.FLUSH_ACK, '*');
         server.off(IPC_EVENTS.RUN_END, '*');
       },
     );
@@ -339,6 +363,13 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
    */
   private async finalizeRun(force = false): Promise<void> {
     if (OrangebeardCypressReporter.disabled) return;
+
+    // Prove every LOG/COMMAND_STEP/SCREENSHOT message the plugin process has already sent
+    // over IPC has actually been received (and its handler invoked) by now. Without this,
+    // a message still crossing the socket at the moment Mocha fires EVENT_RUN_END (or the
+    // plugin's after:run fires RUN_END) is invisible to awaitInflight() below - it hasn't
+    // been registered anywhere yet - so finishTestRun() could go out before it's processed.
+    await this.requestFlushAck();
 
     // Always wait for async work (file IO, IPC callbacks, etc.) to complete *before*
     // we attempt to flush/finish the run.
@@ -695,6 +726,48 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
     });
   }
 
+  // Round-trip barrier against the plugin process: asks it to ack, and waits for that ack.
+  // Node-ipc preserves per-direction message order on a single connection, and the plugin
+  // only sends FLUSH_ACK from inside its FLUSH handler - after every LOG/COMMAND_STEP/
+  // SCREENSHOT emit it had already made (those happen synchronously inside Cypress's own
+  // task/hook callbacks, so by the time *anything* later runs in that process, they're
+  // already written to the socket). So receiving the matching FLUSH_ACK here proves this
+  // process has already received - and dispatched the handler for - everything the plugin
+  // sent before it. No-ops when no plugin has connected yet (e.g. unit tests, join-only
+  // parallel workers that never registered IPC handlers).
+  private async requestFlushAck(timeoutMs = 5000): Promise<void> {
+    const server = OrangebeardCypressReporter.ipcServerRef;
+    const socket = OrangebeardCypressReporter.ipcSocket;
+    if (!server || !socket) return;
+
+    const id = randomUUID();
+
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        OrangebeardCypressReporter.pendingFlushAcks.delete(id);
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[Orangebeard] Timed out waiting for the plugin to acknowledge pending IPC messages; finishing anyway.',
+        );
+        resolve();
+      }, timeoutMs);
+      (timer as unknown as { unref?: () => void }).unref?.();
+
+      OrangebeardCypressReporter.pendingFlushAcks.set(id, () => {
+        clearTimeout(timer);
+        resolve();
+      });
+
+      try {
+        server.emit(socket, IPC_EVENTS.FLUSH, { id });
+      } catch {
+        clearTimeout(timer);
+        OrangebeardCypressReporter.pendingFlushAcks.delete(id);
+        resolve();
+      }
+    });
+  }
+
   private async awaitInflight(): Promise<void> {
     if (OrangebeardCypressReporter.disabled) return;
 
@@ -866,4 +939,8 @@ export default class OrangebeardCypressReporter extends Mocha.reporters.Base {
   private static specArtifactsPromises: Map<string, Promise<void>> = new Map();
   private static specArtifactsResolvers: Map<string, () => void> = new Map();
   private static testNameToUUID: TestNameIndex = new Map();
+
+  private static ipcServerRef: any = null;
+  private static ipcSocket: any = null;
+  private static pendingFlushAcks: Map<string, () => void> = new Map();
 }

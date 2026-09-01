@@ -30,6 +30,9 @@ function resetReporterStatics() {
   R.lockFileName = null;
   R.currentRun = 0;
   R.totalNumberOfRuns = 0;
+  R.ipcServerRef = null;
+  R.ipcSocket = null;
+  R.pendingFlushAcks = new Map();
 }
 
 function makeReporterWithOptions(options: Record<string, any> = {}) {
@@ -275,6 +278,114 @@ test('regression: finalizeRun must resolve promptly even with unrelated work sti
 
   assert.equal(winner, 'resolved');
   assert.equal(finishCalls.length, 1);
+});
+
+test('requestFlushAck resolves immediately when no plugin has connected (no ipcServerRef/ipcSocket)', async () => {
+  resetReporterStatics();
+  const reporter: any = makeReporterWithOptions({});
+
+  const start = Date.now();
+  await reporter.requestFlushAck(1000);
+  assert.ok(Date.now() - start < 100, 'must not wait out the timeout when there is nothing to ask');
+});
+
+test('requestFlushAck resolves as soon as the plugin acks the matching FLUSH id', async () => {
+  resetReporterStatics();
+  const R: any = OrangebeardCypressReporter;
+
+  const emitted: any[] = [];
+  R.ipcServerRef = {
+    emit: (_socket: any, event: string, payload: any) => {
+      emitted.push([event, payload]);
+      // Simulate the plugin replying synchronously with FLUSH_ACK, which the reporter's own
+      // IPC_EVENTS.FLUSH_ACK handler turns into resolving (and clearing) the pending entry.
+      const resolve = R.pendingFlushAcks.get(payload.id);
+      R.pendingFlushAcks.delete(payload.id);
+      resolve?.();
+    },
+  };
+  R.ipcSocket = {};
+
+  const reporter: any = makeReporterWithOptions({});
+
+  const start = Date.now();
+  await reporter.requestFlushAck(5000);
+  assert.ok(Date.now() - start < 100, 'must resolve on ack, not wait out the timeout');
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0][0], 'flush');
+  assert.equal(R.pendingFlushAcks.size, 0, 'the resolved entry must be cleaned up');
+});
+
+test('requestFlushAck falls back to resolving after the timeout if no ack ever arrives', async () => {
+  resetReporterStatics();
+  const R: any = OrangebeardCypressReporter;
+
+  R.ipcServerRef = { emit: () => {} }; // plugin never acks
+  R.ipcSocket = {};
+
+  const reporter: any = makeReporterWithOptions({});
+
+  const start = Date.now();
+  await reporter.requestFlushAck(30);
+  const elapsed = Date.now() - start;
+
+  assert.ok(elapsed >= 30, `expected to wait out the timeout, only waited ${elapsed}ms`);
+  assert.equal(R.pendingFlushAcks.size, 0, 'the timed-out entry must be cleaned up');
+});
+
+test('regression: finalizeRun waits for work that only becomes trackable during the flush round-trip', () => {
+  // This is the scenario that used to finish the run early: a LOG/COMMAND_STEP/SCREENSHOT
+  // message the plugin had already sent, but which the reporter process had not yet received
+  // (and so had nothing in `inflight` to await) at the moment finalizeRun() started. Here the
+  // fake plugin only registers its in-flight work *inside* the FLUSH round-trip - simulating a
+  // message that arrives while the flush request is outstanding - and finalizeRun must not
+  // finish the run until that work completes.
+  return new Promise<void>((done) => {
+    resetReporterStatics();
+    const R: any = OrangebeardCypressReporter;
+    const finishCalls: any[] = [];
+    let lateWorkDone = false;
+
+    R.testRun = 'run-uuid';
+    R.currentRun = 1;
+    R.totalNumberOfRuns = 1;
+    R.client = {
+      finishTestRun: async () => {
+        finishCalls.push(lateWorkDone);
+      },
+    };
+
+    const reporter: any = makeReporterWithOptions({});
+    reporter.isParallel = false;
+
+    R.ipcServerRef = {
+      emit: (_socket: any, _event: string, payload: any) => {
+        // Simulate a LOG message that "arrives" only now, registering async work the
+        // reporter didn't know about when requestFlushAck() was called.
+        reporter.track(
+          new Promise<void>((resolve) =>
+            setTimeout(() => {
+              lateWorkDone = true;
+              resolve();
+            }, 10),
+          ),
+        );
+
+        setTimeout(() => {
+          const resolve = R.pendingFlushAcks.get(payload.id);
+          R.pendingFlushAcks.delete(payload.id);
+          resolve?.();
+        }, 0);
+      },
+    };
+    R.ipcSocket = {};
+
+    reporter.finalizeRun().then(() => {
+      assert.equal(finishCalls.length, 1);
+      assert.equal(finishCalls[0], true, 'finishTestRun must not fire before the late-arriving work completed');
+      done();
+    });
+  });
 });
 
 test('formatAsMarkdownCodeBlock wraps and escapes fences', () => {
