@@ -1,5 +1,7 @@
 import ipc from 'node-ipc';
 
+import { getServerIpcChannelId } from './ipcChannelId';
+
 export type SubscribeFn = (server: any) => void;
 export type UnsubscribeFn = (server: any) => void;
 
@@ -11,7 +13,7 @@ export function startIPCServer(subscribe: SubscribeFn, unsubscribe: UnsubscribeF
     return;
   }
 
-  (ipc as any).config.id = 'orangebeard';
+  (ipc as any).config.id = getServerIpcChannelId();
   (ipc as any).config.retry = 1500;
   (ipc as any).config.silent = true;
 

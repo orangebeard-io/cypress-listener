@@ -3,6 +3,7 @@ import ipc from 'node-ipc';
 import { IPC_EVENTS } from '../ipcEvents';
 import { connectIPCClient } from './ipcClient';
 import { createAfterRunHandler } from './afterRun';
+import { getClientIpcChannelId } from '../ipcChannelId';
 import type { OrangebeardPluginCallbacks } from './types';
 
 /**
@@ -18,14 +19,17 @@ function registerOrangebeardPlugin(
 ): void {
   connectIPCClient(config);
 
+  const channelId = getClientIpcChannelId();
+  const channel = () => (ipc as any).of[channelId];
+
   on('task', {
     orangebeard_log(log: any) {
-      (ipc as any).of.orangebeard.emit(IPC_EVENTS.LOG, log);
+      channel().emit(IPC_EVENTS.LOG, log);
       return null;
     },
 
     orangebeard_step(step: any) {
-      (ipc as any).of.orangebeard.emit(IPC_EVENTS.COMMAND_STEP, step);
+      channel().emit(IPC_EVENTS.COMMAND_STEP, step);
       return null;
     },
   });
@@ -37,7 +41,7 @@ function registerOrangebeardPlugin(
       logMessage = callbacks.screenshotLogFn(screenshotInfo);
     }
 
-    (ipc as any).of.orangebeard.emit(IPC_EVENTS.SCREENSHOT, {
+    channel().emit(IPC_EVENTS.SCREENSHOT, {
       logMessage,
       screenshotInfo,
     });
@@ -47,7 +51,7 @@ function registerOrangebeardPlugin(
 
   // Cypress >= 10
   on('after:spec', (spec: any, results: any) => {
-    (ipc as any).of.orangebeard.emit(IPC_EVENTS.SPEC_ARTIFACTS, {
+    channel().emit(IPC_EVENTS.SPEC_ARTIFACTS, {
       spec,
       results,
     });
@@ -60,7 +64,7 @@ function registerOrangebeardPlugin(
   on(
     'after:run',
     createAfterRunHandler(
-      () => (ipc as any).of.orangebeard.emit(IPC_EVENTS.RUN_END, {}),
+      () => channel().emit(IPC_EVENTS.RUN_END, {}),
       callbacks,
     ),
   );
