@@ -388,6 +388,41 @@ test('regression: finalizeRun waits for work that only becomes trackable during 
   });
 });
 
+test('finalizeRun only pays the flush-ack round-trip on the call that will actually finish/flush', async () => {
+  // Non-final specs early-return without finishing/flushing anything, so there's nothing to
+  // gain from proving IPC messages have been received - paying that cost on every spec
+  // transition (instead of just the last one) would add avoidable latency, and if the
+  // plugin's socket were ever stale, an avoidable stall, to every spec instead of just one.
+  resetReporterStatics();
+  const R: any = OrangebeardCypressReporter;
+
+  const flushRequests: any[] = [];
+  R.ipcServerRef = {
+    emit: (_socket: any, _event: string, payload: any) => {
+      flushRequests.push(payload);
+      const resolve = R.pendingFlushAcks.get(payload.id);
+      R.pendingFlushAcks.delete(payload.id);
+      resolve?.();
+    },
+  };
+  R.ipcSocket = {};
+
+  R.testRun = 'run-uuid';
+  R.currentRun = 1;
+  R.totalNumberOfRuns = 50; // not the last spec, and not forced
+  R.client = { finishTestRun: async () => {} };
+
+  const reporter: any = makeReporterWithOptions({});
+  reporter.isParallel = false;
+
+  await reporter.finalizeRun();
+  assert.equal(flushRequests.length, 0, 'a non-final, non-forced spec must not request a flush-ack');
+
+  // The call that actually finishes the run must still request one.
+  await reporter.finalizeRun(true);
+  assert.equal(flushRequests.length, 1, 'the call that actually finishes the run must request a flush-ack');
+});
+
 test('formatAsMarkdownCodeBlock wraps and escapes fences', () => {
   const md = formatAsMarkdownCodeBlock('line1\n```\nline2', 'js');
   assert.ok(md.startsWith('```js\n'));
